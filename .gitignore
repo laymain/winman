@@ -1,0 +1,9 @@
+# Build products
+.build/
+build/
+
+# Local signing material — never commit private keys
+.signing/
+
+# macOS
+.DS_Store

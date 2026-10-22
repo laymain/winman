@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: sw_vers && xcodebuild -version
+
+      - name: Run tests
+        run: swift test
+
+      - name: Stamp version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Support/Info.plist
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Support/Info.plist
+
+      - name: Build and assemble app
+        run: ./Scripts/make-app.sh
+
+      # Optional Developer ID signing + notarization. Configured entirely via
+      # repository secrets; when absent the app ships ad-hoc signed and the
+      # release notes tell users to bypass Gatekeeper.
+      - name: Import Developer ID certificate
+        id: cert
+        env:
+          CERT_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$CERT_BASE64" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Developer ID secrets configured; shipping ad-hoc signed."
+            exit 0
+          fi
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo "$CERT_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$RUNNER_TEMP/password" "$KEYCHAIN_PATH" || true
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$RUNNER_TEMP/password" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          echo "available=true" >> "$GITHUB_OUTPUT"
+          rm -f "$CERT_PATH"
+
+      - name: Sign with Developer ID
+        if: steps.cert.outputs.available == 'true'
+        run: |
+          codesign --force --deep --options runtime --timestamp \
+            --sign "$MACOS_SIGNING_IDENTITY" build/WinMan.app
+          codesign --verify --deep --strict build/WinMan.app
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+
+      - name: Notarize and staple
+        if: steps.cert.outputs.available == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          ditto -c -k --keepParent build/WinMan.app WinMan.zip
+          xcrun notarytool submit WinMan.zip \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --wait
+          xcrun stapler staple build/WinMan.app
+          rm -f WinMan.zip
+
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ditto -c -k --keepParent build/WinMan.app "WinMan-$VERSION.zip"
+          # Record the app's code identity for the release notes check.
+          codesign -dv build/WinMan.app 2>&1 | grep -E "Signature|Authority" || true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${{ steps.cert.outputs.available }}" = "true" ]; then
+            NOTES="WinMan $VERSION — notarized by Apple. Open the app normally after downloading."
+          else
+            NOTES="WinMan $VERSION — ad-hoc signed (no Developer ID). Gatekeeper will block a normal open: right-click the app → Open, or run \`xattr -cr WinMan.app\`. Grant Accessibility access after first launch."
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            "WinMan-$VERSION.zip" \
+            --title "WinMan $VERSION" \
+            --notes "$NOTES"
