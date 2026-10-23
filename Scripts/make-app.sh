@@ -49,9 +49,26 @@ else
 fi
 
 echo "==> Done: $APP_DIR"
+
+# If the app is installed in /Applications (so it can launch at login),
+# refresh that copy and restart it from there. Killing every instance first
+# avoids ending up with the installed app and a build copy both running —
+# they would fight over the same global shortcuts.
+INSTALL_DIR="/Applications/$APP_NAME.app"
+if [ -d "$INSTALL_DIR" ]; then
+    echo "==> Updating $INSTALL_DIR and restarting from there…"
+    pkill -x "$APP_NAME" 2>/dev/null || true
+    sleep 1
+    rm -rf "$INSTALL_DIR"
+    ditto "$APP_DIR" "$INSTALL_DIR"
+    open "$INSTALL_DIR"
+    echo "==> Installed and launched: $INSTALL_DIR"
+fi
+
 echo
 echo "Next steps:"
 echo "  1. Open it:   open '$APP_DIR'"
 echo "  2. Grant Accessibility access when prompted, or via"
 echo "     System Settings → Privacy & Security → Accessibility."
-echo "  3. To keep it running at login: System Settings → General → Login Items."
+echo "  3. Launch at login: Settings → System in the app (macOS may ask you"
+echo "     to approve it under System Settings → General → Login Items)."

@@ -70,7 +70,8 @@ final class WinManEngine {
                 minimized: false,
                 display: display,
                 ratio: settings.snapRatio,
-                gap: settings.snapGap
+                gap: settings.snapGap,
+                maximizeUsesAvailableFrame: settings.maximizeUsesAvailableFrame
             )
         }
 
@@ -85,20 +86,15 @@ final class WinManEngine {
             normalFrame = record?.normalFrame ?? synthesizedNormalFrame(for: display)
         }
 
-        // Always resolve neighbours; the state machine decides whether the
-        // press may actually cycle across displays (wrap-to-self mirror when
-        // there is no adjacent display).
-        let left = DisplayResolver.leftNeighbour(of: display, in: displays)
-        let right = DisplayResolver.rightNeighbour(of: display, in: displays)
-
         let context = TransitionContext(
             state: state,
             currentFrame: currentFrame ?? normalFrame,
             normalFrame: normalFrame,
             display: display,
-            leftNeighbor: left,
-            rightNeighbor: right,
+            displays: displays,
             cycleAcrossDisplays: settings.cycleAcrossDisplays,
+            restorePreservesMonitor: settings.restorePreservesMonitor,
+            maximizeUsesAvailableFrame: settings.maximizeUsesAvailableFrame,
             snapRatio: settings.snapRatio,
             snapGap: settings.snapGap
         )

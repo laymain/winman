@@ -75,7 +75,7 @@ final class SettingsModel: ObservableObject {
             Keys.snapRatio: 0.5,
             Keys.snapGap: 0.0,
             Keys.maximizeAvailable: true,
-            Keys.restorePreservesMonitor: true,
+            Keys.restorePreservesMonitor: false,
             Keys.cycleAcrossDisplays: true,
         ])
         isEnabled = defaults.bool(forKey: Keys.enabled)

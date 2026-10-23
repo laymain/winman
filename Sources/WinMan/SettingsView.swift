@@ -6,6 +6,8 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject private var settings = SettingsModel.shared
     @State private var trusted = AccessibilityClient.shared.isTrusted
+    @State private var launchAtLogin = LoginItem.isEnabled
+    @State private var loginApprovalPending = LoginItem.requiresApproval
 
     var body: some View {
         TabView {
@@ -17,7 +19,11 @@ struct SettingsView: View {
                 .tabItem { Label("System", systemImage: "gearshape") }
         }
         .frame(width: 520, height: 420)
-        .onAppear { refreshTrust() }
+        .onAppear {
+            refreshTrust()
+            launchAtLogin = LoginItem.isEnabled
+            loginApprovalPending = LoginItem.requiresApproval
+        }
     }
 
     // MARK: - Keyboard shortcuts
@@ -79,7 +85,7 @@ struct SettingsView: View {
             Section("Multi-monitor") {
                 Toggle("Cycle snapped windows across adjacent displays",
                        isOn: $settings.cycleAcrossDisplays)
-                Text("When enabled, pressing the same direction again on a snapped window moves it to the adjacent display in that direction, landing on the side closest to the original display.")
+                Text("When enabled, pressing the same direction again on a snapped window moves it to the adjacent display in that direction, landing on the side closest to the original display. At the end of the display row it wraps around to the other end.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -91,6 +97,22 @@ struct SettingsView: View {
 
     private var systemTab: some View {
         Form {
+            Section("Launch at Login") {
+                Toggle("Open WinMan when I log in", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, newValue in
+                        guard LoginItem.setEnabled(newValue) else {
+                            launchAtLogin = LoginItem.isEnabled
+                            return
+                        }
+                        loginApprovalPending = LoginItem.requiresApproval
+                    }
+                if loginApprovalPending {
+                    Text("macOS is waiting for approval — System Settings → General → Login Items.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Accessibility Permission") {
                 HStack {
                     Image(systemName: trusted ? "checkmark.circle.fill" : "xmark.circle.fill")

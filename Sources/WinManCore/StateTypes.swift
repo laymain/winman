@@ -41,13 +41,23 @@ public struct TransitionContext {
     /// Geometry to restore to (pre-snap / pre-maximize / pre-minimize). Only
     /// meaningful when `state != .normal`.
     public var normalFrame: CGRect
+    /// The display the window currently sits on.
     public var display: DisplayGeometry
-    public var leftNeighbor: DisplayGeometry?
-    public var rightNeighbor: DisplayGeometry?
-    /// Whether pressing "outward" horizontally may move the window to the
-    /// adjacent display (the wrap-around mirror happens either way; when this
-    /// is false the same-side press is a no-op).
+    /// Every connected display; cycle targets (adjacent, wrap-around at the
+    /// row ends) and restore re-homing are resolved from it.
+    public var displays: [DisplayGeometry]
+    /// Whether pressing "outward" horizontally may move the window to another
+    /// display (adjacent neighbour, wrapping to the far end of the row; a
+    /// single display mirrors in place). When false the same-side press is a
+    /// no-op.
     public var cycleAcrossDisplays: Bool
+    /// When true, restoring after the window crossed displays jumps back to
+    /// the original monitor's geometry; when false (default) the restore point
+    /// is re-homed onto the display the window is on now.
+    public var restorePreservesMonitor: Bool
+    /// Maximize fills the usable area, menu bar and Dock excluded (true), or
+    /// the display's whole frame (false).
+    public var maximizeUsesAvailableFrame: Bool
     /// Fraction of usable width used by a snapped half (default 0.5).
     public var snapRatio: Double
     /// Optional gap in points between snapped regions.
@@ -58,9 +68,10 @@ public struct TransitionContext {
         currentFrame: CGRect,
         normalFrame: CGRect,
         display: DisplayGeometry,
-        leftNeighbor: DisplayGeometry?,
-        rightNeighbor: DisplayGeometry?,
+        displays: [DisplayGeometry],
         cycleAcrossDisplays: Bool = true,
+        restorePreservesMonitor: Bool = false,
+        maximizeUsesAvailableFrame: Bool = true,
         snapRatio: Double = 0.5,
         snapGap: Double = 0
     ) {
@@ -68,9 +79,10 @@ public struct TransitionContext {
         self.currentFrame = currentFrame
         self.normalFrame = normalFrame
         self.display = display
-        self.leftNeighbor = leftNeighbor
-        self.rightNeighbor = rightNeighbor
+        self.displays = displays
         self.cycleAcrossDisplays = cycleAcrossDisplays
+        self.restorePreservesMonitor = restorePreservesMonitor
+        self.maximizeUsesAvailableFrame = maximizeUsesAvailableFrame
         self.snapRatio = snapRatio
         self.snapGap = snapGap
     }

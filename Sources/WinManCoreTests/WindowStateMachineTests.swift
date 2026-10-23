@@ -32,26 +32,30 @@ struct WindowStateMachineTests {
 
     // MARK: - Helpers
 
-    /// A context for a window in `state` on the main display, with the given
-    /// restore point and (optionally) neighbouring displays.
+    /// A context for a window in `state` on `on` (the main display by
+    /// default), with the given restore point and neighbouring displays.
     private func context(
         state: WindowLogicalState,
         currentFrame: CGRect? = nil,
         normal: CGRect? = nil,
-        left: DisplayGeometry? = nil,
-        right: DisplayGeometry? = nil,
+        on: DisplayGeometry? = nil,
+        extraDisplays: [DisplayGeometry] = [],
         cycle: Bool = true,
+        restorePreservesMonitor: Bool = false,
+        maximizeUsesAvailableFrame: Bool = true,
         ratio: Double = 0.5,
         gap: Double = 0
     ) -> TransitionContext {
-        TransitionContext(
+        let windowDisplay = on ?? display
+        return TransitionContext(
             state: state,
-            currentFrame: currentFrame ?? expectedFrame(for: state, on: display, ratio: ratio, gap: gap),
+            currentFrame: currentFrame ?? expectedFrame(for: state, on: windowDisplay, ratio: ratio, gap: gap),
             normalFrame: normal ?? normalFrame,
-            display: display,
-            leftNeighbor: left,
-            rightNeighbor: right,
+            display: windowDisplay,
+            displays: [windowDisplay] + extraDisplays,
             cycleAcrossDisplays: cycle,
+            restorePreservesMonitor: restorePreservesMonitor,
+            maximizeUsesAvailableFrame: maximizeUsesAvailableFrame,
             snapRatio: ratio,
             snapGap: gap
         )
@@ -269,7 +273,7 @@ struct WindowStateMachineTests {
             (.qBottomLeft, .qBottomRight),
         ]
         for (from, to) in cases {
-            let ctx = context(state: from, left: leftDisplay)
+            let ctx = context(state: from, extraDisplays: [leftDisplay])
             let result = machine.transition(ctx, key: .left)
             #expect(result.newState == to, "\(from) + left")
             #expect(result.action == .applyFrame(expectedFrame(for: to, on: leftDisplay)),
@@ -285,7 +289,7 @@ struct WindowStateMachineTests {
             (.qBottomRight, .qBottomLeft),
         ]
         for (from, to) in cases {
-            let ctx = context(state: from, right: rightDisplay)
+            let ctx = context(state: from, extraDisplays: [rightDisplay])
             let result = machine.transition(ctx, key: .right)
             #expect(result.newState == to, "\(from) + right")
             #expect(result.action == .applyFrame(expectedFrame(for: to, on: rightDisplay)),
@@ -293,9 +297,9 @@ struct WindowStateMachineTests {
         }
     }
 
-    /// With no adjacent display the cycle wraps to the same display and lands
-    /// on the mirrored side there.
-    @Test func cycleWithoutNeighborWrapsToMirroredSideOnSameDisplay() {
+    /// With a single display the cycle wraps to that same display and lands
+    /// on the mirrored side there (the wrap-to-self case verified on Windows).
+    @Test func cycleOnASingleDisplayMirrorsInPlace() {
         let cases: [(WindowLogicalState, Direction, WindowLogicalState)] = [
             (.snappedLeft, .left, .snappedRight),
             (.snappedRight, .right, .snappedLeft),
@@ -315,10 +319,85 @@ struct WindowStateMachineTests {
     /// When the user disabled cross-display cycling, same-side presses are a
     /// no-op even if a neighbour exists.
     @Test func cycleDisabledIsNoOp() {
-        let ctx = context(state: .snappedLeft, left: leftDisplay, cycle: false)
+        let ctx = context(state: .snappedLeft, extraDisplays: [leftDisplay], cycle: false)
         let result = machine.transition(ctx, key: .left)
         #expect(result.action == .noop)
         #expect(result.newState == .snappedLeft)
+    }
+
+    /// At a row end there is no neighbour, so the cycle wraps to the far end
+    /// of the arrangement instead of mirroring in place — pressing right from
+    /// the rightmost display continues on the leftmost one, and vice versa.
+    @Test func cycleWrapsAroundTheRowAtTheFarEnd() {
+        // `display` is the rightmost of [leftDisplay, display] here.
+        let fromRightEnd = context(state: .snappedRight, extraDisplays: [leftDisplay])
+        let rightward = machine.transition(fromRightEnd, key: .right)
+        #expect(rightward.newState == .snappedLeft)
+        #expect(rightward.action == .applyFrame(expectedFrame(for: .snappedLeft, on: leftDisplay)))
+
+        // `leftDisplay` is the leftmost; an outward left press continues at
+        // the right end of the row.
+        let fromLeftEnd = context(state: .snappedLeft, on: leftDisplay, extraDisplays: [display])
+        let leftward = machine.transition(fromLeftEnd, key: .left)
+        #expect(leftward.newState == .snappedRight)
+        #expect(leftward.action == .applyFrame(expectedFrame(for: .snappedRight, on: display)))
+    }
+
+    /// With three displays the wrap lands at the FAR end of the row, not on
+    /// the adjacent one — presses move in the direction they name.
+    @Test func cycleWrapGoesToTheFarEndOfAThreeDisplayRow() {
+        let ctx = context(state: .snappedRight, on: rightDisplay,
+                          extraDisplays: [display, leftDisplay])
+        let result = machine.transition(ctx, key: .right)
+        #expect(result.newState == .snappedLeft)
+        #expect(result.action == .applyFrame(expectedFrame(for: .snappedLeft, on: leftDisplay)))
+    }
+
+    // MARK: - Restore across displays
+
+    /// The window cycled from the right display to the left one; restore must
+    /// bring it back up at normal size ON THE DISPLAY IT IS NOW, keeping its
+    /// relative placement — not jump back to where it started.
+    @Test func restoreAfterCrossDisplayCycleLandsOnTheCurrentMonitor() {
+        let original = CGRect(x: 302, y: 190, width: 907, height: 569)
+        let ctx = context(state: .snappedRight, normal: original,
+                          on: leftDisplay, extraDisplays: [display])
+        let result = machine.transition(ctx, key: .left)
+        #expect(result.newState == .normal)
+
+        guard case .applyFrame(let restored) = result.action else {
+            Issue.record("expected applyFrame, got \(result.action)")
+            return
+        }
+        #expect(restored.size == original.size)
+        // Same offset from the usable area's origin, on the left display…
+        let dx = leftDisplay.availableFrame.minX - display.availableFrame.minX
+        let dy = leftDisplay.availableFrame.minY - display.availableFrame.minY
+        #expect(abs(restored.minX - (original.minX + dx)) < 0.001)
+        #expect(abs(restored.minY - (original.minY + dy)) < 0.001)
+        // …and fully inside its usable area.
+        #expect(leftDisplay.availableFrame.contains(restored))
+    }
+
+    /// The setting opts back into "jump home": restore applies the original
+    /// geometry on the original monitor.
+    @Test func restoreReturnsToOriginalMonitorWhenSettingIsOn() {
+        let original = CGRect(x: 302, y: 190, width: 907, height: 569)
+        let ctx = context(state: .snappedRight, normal: original,
+                          on: leftDisplay, extraDisplays: [display],
+                          restorePreservesMonitor: true)
+        let result = machine.transition(ctx, key: .left)
+        #expect(result.action == .applyFrame(original))
+        #expect(result.newState == .normal)
+    }
+
+    /// Same display means no relocation at all, so ordinary snap → restore is
+    /// untouched by the re-homing logic.
+    @Test func restoreOnTheSameMonitorKeepsTheExactOriginalFrame() {
+        let original = CGRect(x: 302, y: 190, width: 907, height: 569)
+        let ctx = context(state: .snappedLeft, normal: original)
+        let result = machine.transition(ctx, key: .right)
+        #expect(result.action == .applyFrame(original))
     }
 
     // MARK: - Geometry
@@ -528,16 +607,32 @@ struct WindowStateMachineTests {
     @Test func repeatedSnapDoesNotChangeNormalFrame() {
         let first = machine.transition(context(state: .normal), key: .left)
         let second = machine.transition(
-            context(state: .snappedLeft, normal: first.newNormalFrame, left: leftDisplay),
+            context(state: .snappedLeft, normal: first.newNormalFrame, extraDisplays: [leftDisplay]),
             key: .left
         )
         #expect(second.newNormalFrame == first.newNormalFrame)
         #expect(second.newState == .snappedRight)
         let third = machine.transition(
-            context(state: .snappedRight, normal: second.newNormalFrame, right: rightDisplay),
+            context(state: .snappedRight, normal: second.newNormalFrame, extraDisplays: [rightDisplay]),
             key: .right
         )
         #expect(third.newNormalFrame == first.newNormalFrame)
         #expect(third.newState == .snappedLeft)
+    }
+
+    // MARK: - Maximize setting
+
+    /// With "Maximize fills usable area" off, maximize covers the whole
+    /// display frame — and inference reads such a window back as maximized.
+    @Test func maximizeCanFillTheWholeDisplayFrame() {
+        let ctx = context(state: .normal, maximizeUsesAvailableFrame: false)
+        let result = machine.transition(ctx, key: .up)
+        #expect(result.action == .applyFrame(display.frame))
+        #expect(result.newState == .maximized)
+
+        let inferred = WindowStateMachine.inferState(
+            frame: display.frame, minimized: false, display: display,
+            ratio: 0.5, gap: 0, maximizeUsesAvailableFrame: false)
+        #expect(inferred == .maximized)
     }
 }

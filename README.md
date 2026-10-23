@@ -32,10 +32,12 @@ adjacent display in that direction (see the note below the table).
   full-screen mode; the menu bar and Dock stay reachable.
 - **Restore** — returns to the exact position and size the window had before
   it was snapped. Snapped geometry never overwrites the saved restore point.
+  After cycling across displays it restores on the monitor the window is on
+  now (a setting can send it back to the original monitor instead).
 - **(other screen)** — pressing an arrow while the window already sits against
   that screen edge moves it to the adjacent display in that direction, landing
-  on the side facing the original window. With a single display it flips in
-  place instead.
+  on the side facing the original window. At the end of the display row it
+  wraps around to the far end. With a single display it flips in place.
 
 The window's state is read from its actual geometry on every key press, so
 windows you drag or resize by hand behave like normal windows again.
@@ -94,8 +96,8 @@ has an **Enabled** toggle, the current shortcuts, **Settings…**,
   enable or disable individual arrows. Changes apply immediately.
 - **Window Behavior** — snap width (25–90%, default 50%), optional gap,
   maximize/restore behaviour, and cross-display cycling.
-- **System** — Accessibility permission status, a button to open the right
-  pane, and grant/revoke instructions.
+- **System** — launch at login, Accessibility permission status, a button to
+  open the right pane, and grant/revoke instructions.
 
 Settings persist across restarts.
 

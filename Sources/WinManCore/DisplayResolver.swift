@@ -81,6 +81,41 @@ public enum DisplayResolver {
         }
     }
 
+    /// The display to continue cycling on when there is no neighbour in
+    /// `direction`: the far end of the horizontal row, so an outward press at
+    /// a row end wraps around the arrangement instead of mirroring in place.
+    /// With a single display that display comes back, which matches the
+    /// wrap-to-self behaviour verified on Windows. Vertical keys never cycle.
+    public static func wraparound(in displays: [DisplayGeometry],
+                                  direction: Direction) -> DisplayGeometry? {
+        guard !displays.isEmpty else { return nil }
+        switch direction {
+        case .left: return displays.max { $0.frame.maxX < $1.frame.maxX }   // far right end
+        case .right: return displays.min { $0.frame.minX < $1.frame.minX }  // far left end
+        case .up, .down: return nil
+        }
+    }
+
+    /// Moves `frame` onto `target` as if the two displays were the same one:
+    /// same offset from the usable area's origin, same size, clamped inside
+    /// the target's usable area. Identity when the displays match.
+    public static func relocate(_ frame: CGRect,
+                                from origin: DisplayGeometry,
+                                to target: DisplayGeometry) -> CGRect {
+        guard origin.frame != target.frame else { return frame }
+
+        let moved = CGRect(
+            x: frame.minX + (target.availableFrame.minX - origin.availableFrame.minX),
+            y: frame.minY + (target.availableFrame.minY - origin.availableFrame.minY),
+            width: frame.width,
+            height: frame.height
+        )
+        let a = target.availableFrame
+        let x = min(max(moved.minX, a.minX), max(a.minX, a.maxX - moved.width))
+        let y = min(max(moved.minY, a.minY), max(a.minY, a.maxY - moved.height))
+        return CGRect(x: x, y: y, width: moved.width, height: moved.height)
+    }
+
     private static func distanceSquared(_ a: CGRect, _ b: CGPoint) -> CGFloat {
         let dx = a.midX - b.x
         let dy = a.midY - b.y

@@ -126,9 +126,10 @@ public struct WindowStateMachine {
                                     newNormalFrame: restorePoint)
 
         case .restore:
+            let point = Self.restoreFrame(context)
             let action: WindowAction = context.state == .minimized
-                ? .unminimizeThenApplyFrame(context.normalFrame)
-                : .applyFrame(context.normalFrame)
+                ? .unminimizeThenApplyFrame(point)
+                : .applyFrame(point)
             return TransitionResult(action: action,
                                     newState: .normal,
                                     newNormalFrame: restorePoint)
@@ -150,8 +151,7 @@ public struct WindowStateMachine {
                                         newState: context.state,
                                         newNormalFrame: restorePoint)
             }
-            let target = (key == .left ? context.leftNeighbor : context.rightNeighbor)
-                ?? context.display
+            let target = Self.cycleTarget(context, key: key)
             let frame = Self.frame(for: zone, on: target, context: context)
             return TransitionResult(action: .applyFrame(frame),
                                     newState: zone.state,
@@ -211,10 +211,13 @@ public struct WindowStateMachine {
         return CGRect(x: h.minX, y: v.minY, width: h.width, height: v.height)
     }
 
-    /// Frame that fills the usable area (menu bar and Dock excluded). This is
-    /// "maximize" in our model and deliberately does NOT enter native full screen.
-    public static func maximizeFrame(_ display: DisplayGeometry) -> CGRect {
-        display.availableFrame
+    /// Frame that fills the display: the usable area (menu bar and Dock
+    /// excluded) by default, or the whole frame when the matching setting is
+    /// off. This is "maximize" in our model and deliberately does NOT enter
+    /// native full screen.
+    public static func maximizeFrame(_ display: DisplayGeometry,
+                                     usesAvailableFrame: Bool = true) -> CGRect {
+        usesAvailableFrame ? display.availableFrame : display.frame
     }
 
     private static func frame(for zone: Zone,
@@ -231,8 +234,32 @@ public struct WindowStateMachine {
         case .topRight: return quadrantFrame(display, left: false, top: true, ratio: ratio, gap: gap)
         case .bottomLeft: return quadrantFrame(display, left: true, top: false, ratio: ratio, gap: gap)
         case .bottomRight: return quadrantFrame(display, left: false, top: false, ratio: ratio, gap: gap)
-        case .maximized: return maximizeFrame(display)
+        case .maximized: return maximizeFrame(display, usesAvailableFrame: context.maximizeUsesAvailableFrame)
         }
+    }
+
+    /// Where a same-side press continues: the adjacent display in the pressed
+    /// direction, wrapping to the far end of the row when there is none (and
+    /// to the display itself when it is the only one).
+    private static func cycleTarget(_ context: TransitionContext, key: Direction) -> DisplayGeometry {
+        let neighbour = key == .left
+            ? DisplayResolver.leftNeighbour(of: context.display, in: context.displays)
+            : DisplayResolver.rightNeighbour(of: context.display, in: context.displays)
+        return neighbour
+            ?? DisplayResolver.wraparound(in: context.displays, direction: key)
+            ?? context.display
+    }
+
+    /// The geometry a restore applies: the saved point as-is when it already
+    /// belongs to the current display, when the user pinned restores to the
+    /// original monitor, or when nothing is known; otherwise re-homed onto the
+    /// current display so a window that cycled across displays stays put.
+    private static func restoreFrame(_ context: TransitionContext) -> CGRect {
+        guard !context.restorePreservesMonitor else { return context.normalFrame }
+        guard let origin = DisplayResolver.display(
+            containing: context.normalFrame, from: context.displays)
+        else { return context.normalFrame }
+        return DisplayResolver.relocate(context.normalFrame, from: origin, to: context.display)
     }
 
     // MARK: - State inference from geometry
@@ -246,12 +273,13 @@ public struct WindowStateMachine {
         display: DisplayGeometry,
         ratio: Double,
         gap: Double,
+        maximizeUsesAvailableFrame: Bool = true,
         tolerance: CGFloat = 4
     ) -> WindowLogicalState {
         if minimized { return .minimized }
 
         let candidates: [(WindowLogicalState, CGRect)] = [
-            (.maximized, maximizeFrame(display)),
+            (.maximized, maximizeFrame(display, usesAvailableFrame: maximizeUsesAvailableFrame)),
             (.snappedLeft, leftSnapFrame(display, ratio: ratio, gap: gap)),
             (.snappedRight, rightSnapFrame(display, ratio: ratio, gap: gap)),
             (.snappedUp, topSnapFrame(display, gap: gap)),
