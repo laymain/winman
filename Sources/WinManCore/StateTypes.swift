@@ -1,16 +1,24 @@
 import CoreGraphics
 
-/// The five logical window states we track, mirroring the Windows snapping model.
-public enum WindowLogicalState: Equatable, Codable {
+/// The logical window states we track, mirroring the Windows snapping model:
+/// free-floating (normal), the four halves, the four quadrants, maximized, and
+/// minimized.
+public enum WindowLogicalState: Equatable, Codable, Sendable {
     case normal
     case snappedLeft
     case snappedRight
+    case snappedUp
+    case snappedDown
+    case qTopLeft
+    case qTopRight
+    case qBottomLeft
+    case qBottomRight
     case maximized
     case minimized
 }
 
 /// Directional arrow pressed by the user.
-public enum Direction: CaseIterable, Equatable {
+public enum Direction: CaseIterable, Equatable, Sendable {
     case left, right, up, down
 }
 
@@ -36,9 +44,13 @@ public struct TransitionContext {
     public var display: DisplayGeometry
     public var leftNeighbor: DisplayGeometry?
     public var rightNeighbor: DisplayGeometry?
+    /// Whether pressing "outward" horizontally may move the window to the
+    /// adjacent display (the wrap-around mirror happens either way; when this
+    /// is false the same-side press is a no-op).
+    public var cycleAcrossDisplays: Bool
     /// Fraction of usable width used by a snapped half (default 0.5).
     public var snapRatio: Double
-    /// Optional gap in points between the two snapped halves.
+    /// Optional gap in points between snapped regions.
     public var snapGap: Double
 
     public init(
@@ -48,6 +60,7 @@ public struct TransitionContext {
         display: DisplayGeometry,
         leftNeighbor: DisplayGeometry?,
         rightNeighbor: DisplayGeometry?,
+        cycleAcrossDisplays: Bool = true,
         snapRatio: Double = 0.5,
         snapGap: Double = 0
     ) {
@@ -57,6 +70,7 @@ public struct TransitionContext {
         self.display = display
         self.leftNeighbor = leftNeighbor
         self.rightNeighbor = rightNeighbor
+        self.cycleAcrossDisplays = cycleAcrossDisplays
         self.snapRatio = snapRatio
         self.snapGap = snapGap
     }
@@ -70,7 +84,7 @@ public enum WindowAction: Equatable {
     case unminimizeThenApplyFrame(CGRect)
     /// Minimize the window to the Dock.
     case minimize
-    /// Do nothing (e.g. maximize pressed while already maximized).
+    /// Do nothing (e.g. Up pressed while already at the top edge).
     case noop
 }
 

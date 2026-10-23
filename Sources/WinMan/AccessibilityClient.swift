@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import WinManCore
 
 /// Wrapper around the macOS Accessibility (AX) API for reading and writing
 /// window geometry, minimized state, and full-screen state.
@@ -47,28 +48,50 @@ final class AccessibilityClient {
 
     /// The AX element for the currently focused window of the frontmost app,
     /// or nil when unavailable (no trusted process, non-standard app, dialog).
+    ///
+    /// Minimizing a window usually strips the app of its key window entirely,
+    /// which would make "restore from minimized" unreachable. So when the
+    /// focused-window attribute comes up empty, fall back to the app's
+    /// minimized window — the only window a frontmost, key-less app is
+    /// meaningfully pointing at. Every other key is a no-op for minimized
+    /// windows, so this fallback can never act on a window behind your back.
     func focusedWindow() -> AXUIElement? {
         guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
             return nil
         }
         let app = AXUIElementCreateApplication(pid)
-        var value: CFTypeRef?
-        let err = AXUIElementCopyAttributeValue(
-            app, kAXFocusedWindowAttribute as CFString, &value)
-        guard err == .success, let value,
-              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
 
-        let element = unsafeDowncast(value as AnyObject, to: AXUIElement.self)
-
-        // Ensure it is a window-like role (window, dialog, or sheet).
-        var roleValue: CFTypeRef?
-        if AXUIElementCopyAttributeValue(
-            element, kAXRoleAttribute as CFString, &roleValue) == .success,
-           let role = roleValue as? String {
-            let allowed = ["AXWindow", "AXDialog", "AXSheet"]
-            if !allowed.contains(role) { return nil }
+        if let element = windowAttribute(kAXFocusedWindowAttribute, of: app),
+           isWindowLike(element) {
+            return element
         }
-        return element
+
+        var windowsValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            app, kAXWindowsAttribute as CFString, &windowsValue) == .success,
+            let windows = windowsValue as? [AXUIElement]
+        else { return nil }
+        return windows.first(where: isMinimized)
+    }
+
+    /// Reads a window element off an application element, if present.
+    private func windowAttribute(_ name: String, of app: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, name as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXUIElementGetTypeID()
+        else { return nil }
+        return unsafeDowncast(value as AnyObject, to: AXUIElement.self)
+    }
+
+    /// Whether an element has a window-like role (window, dialog, or sheet).
+    /// Unreadable roles are accepted, mirroring AX's best-effort nature.
+    private func isWindowLike(_ element: AXUIElement) -> Bool {
+        var roleValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXRoleAttribute as CFString, &roleValue) == .success,
+            let role = roleValue as? String
+        else { return true }
+        return ["AXWindow", "AXDialog", "AXSheet"].contains(role)
     }
 
     /// Whether the given window is currently minimized.
@@ -91,7 +114,17 @@ final class AccessibilityClient {
 
     // MARK: - Geometry
 
-    /// Reads the window's frame in global screen coordinates.
+    /// Height of the primary display. AppKit and CoreGraphics share the same
+    /// global space except that Y is mirrored about this height: AX reads and
+    /// writes top-left origin, everything above the AX layer uses bottom-left.
+    private var primaryHeight: CGFloat {
+        NSScreen.screens.first { $0.frame.origin == .zero }?.frame.height
+            ?? NSScreen.screens.first?.frame.height
+            ?? 0
+    }
+
+    /// Reads the window's frame in AppKit global coordinates (bottom-left
+    /// origin), converting from the AX top-left origin space.
     func frame(of window: AXUIElement) -> CGRect? {
         var posValue: CFTypeRef?
         var sizeValue: CFTypeRef?
@@ -109,16 +142,20 @@ final class AccessibilityClient {
             AXValueGetValue(posValue as! AXValue, .cgPoint, &point),
             AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
         else { return nil }
-        return CGRect(origin: point, size: size)
+        let axFrame = CGRect(origin: point, size: size)
+        return ScreenSpace.flip(axFrame, primaryHeight: primaryHeight)
     }
 
-    /// Writes the window's frame. Sets size first, then position, and re-asserts
-    /// size to work around apps that adjust one attribute when the other changes.
+    /// Writes the window's frame, given in AppKit global coordinates
+    /// (bottom-left origin; flipped to the AX space here). Sets size first,
+    /// then position, and re-asserts size to work around apps that adjust one
+    /// attribute when the other changes.
     /// Returns true when both attributes accepted the new values.
     @discardableResult
     func setFrame(_ frame: CGRect, of window: AXUIElement) -> Bool {
-        var size = frame.size
-        var point = frame.origin
+        let axFrame = ScreenSpace.flip(frame, primaryHeight: primaryHeight)
+        var size = axFrame.size
+        var point = axFrame.origin
         guard
             let sizeAX = AXValueCreate(.cgSize, &size),
             let posAX = AXValueCreate(.cgPoint, &point)

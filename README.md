@@ -1,48 +1,51 @@
 # WinMan
 
-A macOS menu-bar utility that reproduces the Windows `Win + Arrow`
-window-management model with `⌘ + <modifier> + Arrow`, where the modifier is
-configurable (Option, Control, or Shift; Option by default).
+Keyboard window management for macOS, in the spirit of Windows' `Win + Arrow`:
+`⌘⌥ + arrows` snaps the focused window into halves and quarters, maximizes it,
+restores it, or minimizes it — depending on where the window is right now.
 
-What each arrow does depends on the focused window's current state (normal,
-snapped left, snapped right, maximized, minimized) and its saved geometry —
-not just on the pressed shortcut, like Windows.
-
-Swift, SwiftUI, AppKit. Carbon hot-key API for global shortcuts, Accessibility
-API for window control. No third-party dependencies. Bundle ID:
-`com.laymain.winman`.
+The extra modifier is configurable (Option, Control or Shift; Option by
+default).
 
 ## Behaviour
 
-Default shortcuts (Option as modifier):
+Shortcuts shown with the default modifier (⌥). "Other screen" means the
+adjacent display in that direction (see the note below the table).
 
-| Shortcut | Normal | Snapped left | Snapped right | Maximized | Minimized |
-|---|---|---|---|---|---|
-| `⌘⌥←` | Snap left | Move to left display + snap left, else stay | Restore | Restore, then snap left | Un-minimize + snap left |
-| `⌘⌥→` | Snap right | Restore | Move to right display + snap right, else stay | Restore, then snap right | Un-minimize + snap right |
-| `⌘⌥↑` | Maximize | Maximize | Maximize | Remain maximized | Un-minimize + maximize |
-| `⌘⌥↓` | Minimize | Restore | Restore | Restore | Un-minimize (restore) |
+| State | `⌘⌥↑` | `⌘⌥↓` | `⌘⌥←` | `⌘⌥→` |
+|---|---|---|---|---|
+| Normal | Maximized | Bottom half | Left half | Right half |
+| Maximized | Top half | Normal | Left half | Right half |
+| Minimized | Normal | — | — | — |
+| Top half | — | Normal | Top-left | Top-right |
+| Bottom half | Normal | Minimized | Bottom-left | Bottom-right |
+| Left half | Top-left | Bottom-left | Right half (other screen) | Normal |
+| Right half | Top-right | Bottom-right | Normal | Left half (other screen) |
+| Top-left | Maximized | Left half | Top-right (other screen) | Top-right |
+| Top-right | Maximized | Right half | Top-left | Top-left (other screen) |
+| Bottom-left | Left half | Minimized | Bottom-right (other screen) | Bottom-right |
+| Bottom-right | Right half | Minimized | Bottom-left | Bottom-left (other screen) |
 
-- **Snap**: fills ~50% of the usable display width (menu bar and Dock
-  excluded), flush to the edge. Ratio and gap are configurable.
-- **Maximize**: fills the usable desktop area. Does *not* enter native
-  full-screen mode.
-- **Restore**: returns to the exact saved position and size. Snapped and
-  maximized geometry never overwrites the saved restore point.
-- **Multi-monitor**: a snapped window cycles to the adjacent display in the
-  pressed direction, preserving its snapped side; with no adjacent display it
-  stays put. Horizontal, vertical, and mixed arrangements are supported.
+- **Snap** — halves and quarters fill the usable display area (menu bar and
+  Dock excluded), flush to the edge. Width and gap are configurable.
+- **Maximize** — fills the usable display area. It does not trigger macOS
+  full-screen mode; the menu bar and Dock stay reachable.
+- **Restore** — returns to the exact position and size the window had before
+  it was snapped. Snapped geometry never overwrites the saved restore point.
+- **(other screen)** — pressing an arrow while the window already sits against
+  that screen edge moves it to the adjacent display in that direction, landing
+  on the side facing the original window. With a single display it flips in
+  place instead.
 
-Window state is re-inferred from actual geometry on every press, so windows
-moved or resized manually between shortcuts are handled correctly (they become
-"normal" again).
+The window's state is read from its actual geometry on every key press, so
+windows you drag or resize by hand behave like normal windows again.
 
 ## Requirements
 
 - macOS 14.0 or later (developed and verified on macOS 27 / Apple Silicon).
-- Full **Xcode** to build the app target (SwiftUI macros are not in the
+- Full Xcode to build the app (the SwiftUI views use macros that aren't in the
   Command Line Tools).
-- Accessibility permission to control other apps' windows.
+- Accessibility permission, to control other apps' windows.
 
 ## Building
 
@@ -56,80 +59,45 @@ Select the **WinMan** scheme and Run.
 
 ### Command line
 
-Requires an Xcode toolchain (the Command Line Tools alone are not sufficient):
-
 ```sh
 ./Scripts/make-app.sh      # builds release + assembles build/WinMan.app
 open build/WinMan.app
 ```
 
-`make-app.sh` signs the app with the stable local certificate created by
-`./Scripts/setup-signing.sh` (run once). This matters: ad-hoc signatures
-change on every rebuild, which silently revokes the Accessibility grant. If
-the certificate is missing the script falls back to ad-hoc and warns.
+The script signs with the local certificate created by
+`./Scripts/setup-signing.sh` (run once). Ad-hoc signatures change on every
+rebuild, which revokes the Accessibility grant each time; without the
+certificate the script falls back to ad-hoc and warns.
 
 ## Permissions
 
-WinMan requires **Accessibility** access to read and move other applications'
-windows.
+WinMan needs **Accessibility** access to move other applications' windows.
 
-1. On first launch the app prompts for access. If you dismissed it, open
+1. On first launch the app asks for it. If you dismissed the prompt, open
    **System Settings → Privacy & Security → Accessibility**.
-2. Find **WinMan** in the list and enable it. If it is not listed, drag
-   `build/WinMan.app` from Finder into the list.
-3. If the app was already running when permission was granted, quit and
-   relaunch it.
+2. Enable **WinMan** in the list. If it's missing, drag `build/WinMan.app`
+   from Finder into the list.
+3. Quit and relaunch WinMan if it was already running when you granted access.
 
-To revoke: turn the toggle off, or press **−**. The Settings → System tab
-shows the current status and can open the pane directly.
+To revoke, turn the toggle off or remove the entry. The Settings → System tab
+shows the current status and opens the right pane for you.
 
 ## Usage
 
-The app lives entirely in the menu bar (no Dock icon, no main window). Its
-menu contains an **Enabled** toggle, the current shortcuts, **Settings…**,
+WinMan lives entirely in the menu bar — no Dock icon, no main window. Its menu
+has an **Enabled** toggle, the current shortcuts, **Settings…**,
 **Accessibility Permissions…**, and **Quit**.
 
 ### Settings
 
-- **Keyboard Shortcuts** — enable/disable the manager, choose the modifier,
-  see the full combination in native symbols (e.g. `⌘⌥`), and enable/disable
-  each arrow individually. Changes apply immediately.
+- **Keyboard Shortcuts** — turn the manager on or off, pick the modifier, and
+  enable or disable individual arrows. Changes apply immediately.
 - **Window Behavior** — snap width (25–90%, default 50%), optional gap,
-  maximize/restore behaviour, and whether snapped windows cycle across
-  displays.
-- **System** — Accessibility permission status, a button to open the relevant
+  maximize/restore behaviour, and cross-display cycling.
+- **System** — Accessibility permission status, a button to open the right
   pane, and grant/revoke instructions.
 
-Settings persist across restarts (UserDefaults).
-
-## Project structure
-
-```
-Package.swift
-Sources/
-  WinManCore/             Pure logic — no SwiftUI, testable anywhere
-    StateTypes.swift        States, directions, display geometry, actions
-    WindowStateMachine.swift  Transition table + geometry + state inference
-    DisplayResolver.swift   Display adjacency and containment (pure geometry)
-  WinMan/                 The app — needs full Xcode to build
-    AccessibilityClient.swift  AXUIElement read/write, trust, focus, raise
-    ShortcutManager.swift      Carbon RegisterEventHotKey global hot keys
-    WindowStore.swift          Per-window restore-point cache
-    WinManEngine.swift         Orchestrates one key press
-    SettingsModel.swift        Settings + persistence
-    SettingsView.swift         Settings window (3 tabs)
-    MenuBarContentView.swift   Menu-bar dropdown
-    WinManApp.swift            @main App + AppDelegate wiring
-  WinManCoreTests/        Swift Testing suite for the state machine
-Support/Info.plist        Bundle metadata (LSUIElement, AX usage description)
-Scripts/make-app.sh       Builds and assembles build/WinMan.app
-Scripts/setup-signing.sh  Creates the stable local signing certificate
-ARCHITECTURE.md           Design notes, Windows-behaviour validation, limits
-```
-
-The shortcut manager, engine, state machine, settings, and UI are separate
-modules. The state machine is deliberately free of macOS APIs so every
-transition is unit-tested in isolation.
+Settings persist across restarts.
 
 ## Testing
 
@@ -137,10 +105,9 @@ transition is unit-tested in isolation.
 swift test
 ```
 
-Swift Testing suite (40 tests): every transition in the behaviour table,
-snap/maximize geometry, snap gap, state inference (including a manually moved
-snapped window), multi-monitor cycling with and without an adjacent display,
-repeated presses, and round-trip restoration of the original frame.
+The Swift Testing suite (32 tests) covers all 44 state transitions, snap and
+quadrant geometry, state inference (including manually moved windows),
+multi-monitor cycling, and restore-point round trips.
 
 `swift test` builds the whole package and needs the full Xcode toolchain. The
 core library alone builds with the Command Line Tools:
@@ -148,31 +115,25 @@ core library alone builds with the Command Line Tools:
 
 ## Distribution
 
-The current signing identity is a local self-signed certificate; the app runs
-only on machines that trust it. Distribution outside the Mac App Store
+The current signing identity is a local self-signed certificate, so the app
+only runs on machines that trust it. Distributing outside the Mac App Store
 requires an Apple Developer Program membership, a Developer ID Application
-certificate, and notarization (`notarytool` + `stapler`). The Mac App Store is
-not an option: the App Sandbox blocks controlling other apps' windows.
+certificate, and notarization. The Mac App Store is not an option — the App
+Sandbox blocks controlling other apps' windows.
 
-Every user must grant Accessibility access manually regardless of signing.
+Either way, every user grants Accessibility access themselves.
 
 ## Known limitations
 
-macOS platform constraints, not bugs. See ARCHITECTURE.md for detail.
-
-- **Accessibility API is best-effort.** Some applications (certain Java,
-  Electron, games, or apps with custom window servers) do not expose standard
-  window controls and may ignore or partially honour position/size writes.
-  WinMan re-asserts size after setting position and never fights an app that
-  refuses a change.
-- **Native full-screen windows** live in their own Space and are not
-  addressable by frame. The engine detects this and does nothing.
-- **Window identity** is keyed on `(process id, title)` because macOS has no
-  stable public window identifier. Several windows with identical titles in
-  one app may share a restore point.
-- **Global shortcut conflicts.** If `⌘ + <modifier> + Arrow` is already
-  claimed by macOS or another app, registration fails for that arrow (logged);
-  pick a different modifier in Settings.
-- **Not exact Windows compatibility.** The transition table is unit-tested and
-  cross-checked against Windows 10/11 semantics, but verify interactive
-  behaviour on your real multi-monitor setup before claiming full parity.
+- **The Accessibility API is best-effort.** Some apps (certain Java, Electron
+  or games with custom window servers) don't expose standard window controls
+  and may ignore position or size writes. WinMan re-asserts size after setting
+  position and never fights an app that refuses a change.
+- **Native full-screen windows** live in their own Space and can't be moved by
+  frame. WinMan detects this and does nothing.
+- **Window identity** is keyed on process id + title, because macOS has no
+  stable public window id. Several identically-titled windows in one app may
+  share a restore point.
+- **Shortcut conflicts.** If `⌘ + <modifier> + Arrow` is already claimed by
+  macOS or another app, that arrow won't fire (the failure is logged). Pick a
+  different modifier in Settings.

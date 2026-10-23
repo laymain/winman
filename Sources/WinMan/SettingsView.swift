@@ -42,7 +42,7 @@ struct SettingsView: View {
                 Toggle("Snap Left   \(settings.shortcutDisplay)←", isOn: $settings.enabledArrows.left)
                 Toggle("Snap Right  \(settings.shortcutDisplay)→", isOn: $settings.enabledArrows.right)
                 Toggle("Maximize    \(settings.shortcutDisplay)↑", isOn: $settings.enabledArrows.up)
-                Toggle("Minimize    \(settings.shortcutDisplay)↓", isOn: $settings.enabledArrows.down)
+                Toggle("Snap Down  \(settings.shortcutDisplay)↓", isOn: $settings.enabledArrows.down)
             }
 
             Section {
@@ -79,7 +79,7 @@ struct SettingsView: View {
             Section("Multi-monitor") {
                 Toggle("Cycle snapped windows across adjacent displays",
                        isOn: $settings.cycleAcrossDisplays)
-                Text("When enabled, pressing the same direction again on a snapped window moves it to the adjacent display in that direction, preserving the snapped side.")
+                Text("When enabled, pressing the same direction again on a snapped window moves it to the adjacent display in that direction, landing on the side closest to the original display.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

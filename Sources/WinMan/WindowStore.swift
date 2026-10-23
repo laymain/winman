@@ -6,7 +6,7 @@ import WinManCore
 ///
 /// macOS Accessibility elements have no stable, public unique identifier, so
 /// (pid, title) is the best available heuristic. It is imperfect when an app
-/// has several windows with identical titles; see ARCHITECTURE.md.
+/// has several windows with identical titles.
 struct WindowIdentity: Hashable {
     let pid: pid_t
     let title: String

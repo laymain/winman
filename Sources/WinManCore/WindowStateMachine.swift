@@ -1,11 +1,163 @@
 import CoreGraphics
 
-/// Pure, side-effect-free state machine that reproduces the Windows
-/// Win + Arrow window-management transitions. It has no dependency on AppKit,
-/// the Accessibility API, or any global state, so it can be unit-tested
+/// Pure, side-effect-free state machine that reproduces the Win + Arrow
+/// window-management transitions. It has no dependency on AppKit, the
+/// Accessibility API, or any global state, so it can be unit-tested
 /// exhaustively in isolation.
 public struct WindowStateMachine {
     public init() {}
+
+    // MARK: - Model
+
+    /// Where on a display a snapped window sits. Every outcome that moves the
+    /// window targets one of these; `.normal` and `.minimized` are carried by
+    /// `WindowLogicalState` instead because they have no display-relative frame.
+    private enum Zone: Equatable {
+        case left, right, top, bottom
+        case topLeft, topRight, bottomLeft, bottomRight
+        case maximized
+
+        var state: WindowLogicalState {
+            switch self {
+            case .left: return .snappedLeft
+            case .right: return .snappedRight
+            case .top: return .snappedUp
+            case .bottom: return .snappedDown
+            case .topLeft: return .qTopLeft
+            case .topRight: return .qTopRight
+            case .bottomLeft: return .qBottomLeft
+            case .bottomRight: return .qBottomRight
+            case .maximized: return .maximized
+            }
+        }
+    }
+
+    /// What one key press asks for, decided without touching geometry.
+    private enum Outcome: Equatable {
+        /// Move into `zone` on the current display.
+        case to(Zone)
+        /// Return to the saved normal frame.
+        case restore
+        case minimize
+        /// Pressing outward from a side edge: hop to the adjacent display in
+        /// that direction (wrapping to the current display when there is none),
+        /// landing on `zone` — the position mirrored across the pressed edge.
+        case cycle(Zone)
+        /// Keep the current state; do nothing.
+        case stay
+    }
+
+    // MARK: - The transition table
+
+    /// All 44 (state × key) transitions in one exhaustive switch — the
+    /// compiler fails the build if a cell is missing.
+    private static func outcome(of state: WindowLogicalState, key: Direction) -> Outcome {
+        switch (state, key) {
+        //               Up                     Down                   Left                     Right
+        case (.normal, .up):              return .to(.maximized)
+        case (.normal, .down):            return .to(.bottom)
+        case (.normal, .left):            return .to(.left)
+        case (.normal, .right):           return .to(.right)
+
+        case (.minimized, .up):           return .restore
+        case (.minimized, _):             return .stay
+
+        case (.maximized, .up):           return .to(.top)
+        case (.maximized, .down):         return .restore
+        case (.maximized, .left):         return .to(.left)
+        case (.maximized, .right):        return .to(.right)
+
+        case (.snappedUp, .up):           return .stay
+        case (.snappedUp, .down):         return .restore
+        case (.snappedUp, .left):         return .to(.topLeft)
+        case (.snappedUp, .right):        return .to(.topRight)
+
+        case (.snappedDown, .up):         return .restore
+        case (.snappedDown, .down):       return .minimize
+        case (.snappedDown, .left):       return .to(.bottomLeft)
+        case (.snappedDown, .right):      return .to(.bottomRight)
+
+        case (.snappedLeft, .up):         return .to(.topLeft)
+        case (.snappedLeft, .down):       return .to(.bottomLeft)
+        case (.snappedLeft, .left):       return .cycle(.right)
+        case (.snappedLeft, .right):      return .restore
+
+        case (.snappedRight, .up):        return .to(.topRight)
+        case (.snappedRight, .down):      return .to(.bottomRight)
+        case (.snappedRight, .left):      return .restore
+        case (.snappedRight, .right):     return .cycle(.left)
+
+        case (.qTopLeft, .up):            return .to(.maximized)
+        case (.qTopLeft, .down):          return .to(.left)
+        case (.qTopLeft, .left):          return .cycle(.topRight)
+        case (.qTopLeft, .right):         return .to(.topRight)
+
+        case (.qTopRight, .up):           return .to(.maximized)
+        case (.qTopRight, .down):         return .to(.right)
+        case (.qTopRight, .left):         return .to(.topLeft)
+        case (.qTopRight, .right):        return .cycle(.topLeft)
+
+        case (.qBottomLeft, .up):         return .to(.left)
+        case (.qBottomLeft, .down):       return .minimize
+        case (.qBottomLeft, .left):       return .cycle(.bottomRight)
+        case (.qBottomLeft, .right):      return .to(.bottomRight)
+
+        case (.qBottomRight, .up):        return .to(.right)
+        case (.qBottomRight, .down):      return .minimize
+        case (.qBottomRight, .left):      return .to(.bottomLeft)
+        case (.qBottomRight, .right):     return .cycle(.bottomLeft)
+        }
+    }
+
+    // MARK: - Transition
+
+    /// Compute the next state and action for a directional key press, given the
+    /// current window state and geometry.
+    public func transition(_ context: TransitionContext, key: Direction) -> TransitionResult {
+        // The restore point: a free-floating window's live frame is what the
+        // user wants back; for every other state it is the frame saved on the
+        // way in — snapped/maximized geometry never overwrites it.
+        let restorePoint = context.state == .normal ? context.currentFrame : context.normalFrame
+
+        switch Self.outcome(of: context.state, key: key) {
+        case .stay:
+            return TransitionResult(action: .noop,
+                                    newState: context.state,
+                                    newNormalFrame: restorePoint)
+
+        case .restore:
+            let action: WindowAction = context.state == .minimized
+                ? .unminimizeThenApplyFrame(context.normalFrame)
+                : .applyFrame(context.normalFrame)
+            return TransitionResult(action: action,
+                                    newState: .normal,
+                                    newNormalFrame: restorePoint)
+
+        case .minimize:
+            return TransitionResult(action: .minimize,
+                                    newState: .minimized,
+                                    newNormalFrame: restorePoint)
+
+        case .to(let zone):
+            let frame = Self.frame(for: zone, on: context.display, context: context)
+            return TransitionResult(action: .applyFrame(frame),
+                                    newState: zone.state,
+                                    newNormalFrame: restorePoint)
+
+        case .cycle(let zone):
+            guard context.cycleAcrossDisplays else {
+                return TransitionResult(action: .noop,
+                                        newState: context.state,
+                                        newNormalFrame: restorePoint)
+            }
+            let target = (key == .left ? context.leftNeighbor : context.rightNeighbor)
+                ?? context.display
+            let frame = Self.frame(for: zone, on: target, context: context)
+            return TransitionResult(action: .applyFrame(frame),
+                                    newState: zone.state,
+                                    newNormalFrame: restorePoint)
+        }
+    }
 
     // MARK: - Geometry helpers
 
@@ -27,17 +179,67 @@ public struct WindowStateMachine {
         return CGRect(x: x, y: a.minY, width: max(1, w), height: a.height)
     }
 
+    /// Frame of the top half of a display's usable area (always an even
+    /// vertical split).
+    public static func topSnapFrame(_ display: DisplayGeometry, gap: Double) -> CGRect {
+        let a = display.availableFrame
+        let g = max(0, gap)
+        let h = (a.height * 0.5) - (g / 2)
+        return CGRect(x: a.minX, y: a.minY + (a.height * 0.5) + (g / 2),
+                      width: a.width, height: max(1, h))
+    }
+
+    /// Frame of the bottom half of a display's usable area.
+    public static func bottomSnapFrame(_ display: DisplayGeometry, gap: Double) -> CGRect {
+        let a = display.availableFrame
+        let g = max(0, gap)
+        let h = (a.height * 0.5) - (g / 2)
+        return CGRect(x: a.minX, y: a.minY, width: a.width, height: max(1, h))
+    }
+
+    /// Frame of a quadrant: the intersection of one horizontal half (which
+    /// honours the snap ratio) and one vertical half.
+    public static func quadrantFrame(_ display: DisplayGeometry,
+                                     left: Bool, top: Bool,
+                                     ratio: Double, gap: Double) -> CGRect {
+        let h = left
+            ? leftSnapFrame(display, ratio: ratio, gap: gap)
+            : rightSnapFrame(display, ratio: ratio, gap: gap)
+        let v = top
+            ? topSnapFrame(display, gap: gap)
+            : bottomSnapFrame(display, gap: gap)
+        return CGRect(x: h.minX, y: v.minY, width: h.width, height: v.height)
+    }
+
     /// Frame that fills the usable area (menu bar and Dock excluded). This is
     /// "maximize" in our model and deliberately does NOT enter native full screen.
     public static func maximizeFrame(_ display: DisplayGeometry) -> CGRect {
         display.availableFrame
     }
 
+    private static func frame(for zone: Zone,
+                              on display: DisplayGeometry,
+                              context: TransitionContext) -> CGRect {
+        let ratio = context.snapRatio
+        let gap = context.snapGap
+        switch zone {
+        case .left: return leftSnapFrame(display, ratio: ratio, gap: gap)
+        case .right: return rightSnapFrame(display, ratio: ratio, gap: gap)
+        case .top: return topSnapFrame(display, gap: gap)
+        case .bottom: return bottomSnapFrame(display, gap: gap)
+        case .topLeft: return quadrantFrame(display, left: true, top: true, ratio: ratio, gap: gap)
+        case .topRight: return quadrantFrame(display, left: false, top: true, ratio: ratio, gap: gap)
+        case .bottomLeft: return quadrantFrame(display, left: true, top: false, ratio: ratio, gap: gap)
+        case .bottomRight: return quadrantFrame(display, left: false, top: false, ratio: ratio, gap: gap)
+        case .maximized: return maximizeFrame(display)
+        }
+    }
+
     // MARK: - State inference from geometry
 
     /// Best-effort inference of a window's logical state by comparing its
-    /// current frame with the expected snap / maximize frames for the display
-    /// it currently occupies. Returns `.normal` when nothing matches.
+    /// current frame with the expected frames for the display it occupies.
+    /// Returns `.normal` when nothing matches.
     public static func inferState(
         frame: CGRect,
         minimized: Bool,
@@ -47,14 +249,21 @@ public struct WindowStateMachine {
         tolerance: CGFloat = 4
     ) -> WindowLogicalState {
         if minimized { return .minimized }
-        if Self.framesApproximatelyEqual(frame, maximizeFrame(display), tolerance: tolerance) {
-            return .maximized
-        }
-        if Self.framesApproximatelyEqual(frame, leftSnapFrame(display, ratio: ratio, gap: gap), tolerance: tolerance) {
-            return .snappedLeft
-        }
-        if Self.framesApproximatelyEqual(frame, rightSnapFrame(display, ratio: ratio, gap: gap), tolerance: tolerance) {
-            return .snappedRight
+
+        let candidates: [(WindowLogicalState, CGRect)] = [
+            (.maximized, maximizeFrame(display)),
+            (.snappedLeft, leftSnapFrame(display, ratio: ratio, gap: gap)),
+            (.snappedRight, rightSnapFrame(display, ratio: ratio, gap: gap)),
+            (.snappedUp, topSnapFrame(display, gap: gap)),
+            (.snappedDown, bottomSnapFrame(display, gap: gap)),
+            (.qTopLeft, quadrantFrame(display, left: true, top: true, ratio: ratio, gap: gap)),
+            (.qTopRight, quadrantFrame(display, left: false, top: true, ratio: ratio, gap: gap)),
+            (.qBottomLeft, quadrantFrame(display, left: true, top: false, ratio: ratio, gap: gap)),
+            (.qBottomRight, quadrantFrame(display, left: false, top: false, ratio: ratio, gap: gap)),
+        ]
+        for (state, expected) in candidates
+        where framesApproximatelyEqual(frame, expected, tolerance: tolerance) {
+            return state
         }
         return .normal
     }
@@ -64,129 +273,5 @@ public struct WindowStateMachine {
         abs(a.minY - b.minY) <= tolerance &&
         abs(a.width - b.width) <= tolerance &&
         abs(a.height - b.height) <= tolerance
-    }
-
-    // MARK: - The transition table
-
-    /// Compute the next state and action for a directional key press, given the
-    /// current window state and geometry. This mirrors the documented behaviour
-    /// table; see ARCHITECTURE.md for the mapping to real Windows behaviour.
-    public func transition(_ context: TransitionContext, key: Direction) -> TransitionResult {
-        let d = context.display
-        let ratio = context.snapRatio
-        let gap = context.snapGap
-        let left = WindowStateMachine.leftSnapFrame(d, ratio: ratio, gap: gap)
-        let right = WindowStateMachine.rightSnapFrame(d, ratio: ratio, gap: gap)
-        let max = WindowStateMachine.maximizeFrame(d)
-
-        switch (context.state, key) {
-        // Normal window
-        case (.normal, .left):
-            return TransitionResult(action: .applyFrame(left),
-                                    newState: .snappedLeft,
-                                    newNormalFrame: context.currentFrame)
-        case (.normal, .right):
-            return TransitionResult(action: .applyFrame(right),
-                                    newState: .snappedRight,
-                                    newNormalFrame: context.currentFrame)
-        case (.normal, .up):
-            return TransitionResult(action: .applyFrame(max),
-                                    newState: .maximized,
-                                    newNormalFrame: context.currentFrame)
-        case (.normal, .down):
-            return TransitionResult(action: .minimize,
-                                    newState: .minimized,
-                                    newNormalFrame: context.currentFrame)
-
-        // Snapped left
-        case (.snappedLeft, .left):
-            if let leftDisplay = context.leftNeighbor {
-                let target = WindowStateMachine.leftSnapFrame(leftDisplay, ratio: ratio, gap: gap)
-                return TransitionResult(action: .applyFrame(target),
-                                        newState: .snappedLeft,
-                                        newNormalFrame: context.normalFrame)
-            } else {
-                // No display to the left: remain snapped left.
-                return TransitionResult(action: .noop,
-                                        newState: .snappedLeft,
-                                        newNormalFrame: context.normalFrame)
-            }
-        case (.snappedLeft, .right):
-            // Opposite-direction restore to previous size/position.
-            return TransitionResult(action: .applyFrame(context.normalFrame),
-                                    newState: .normal,
-                                    newNormalFrame: context.normalFrame)
-        case (.snappedLeft, .up):
-            return TransitionResult(action: .applyFrame(max),
-                                    newState: .maximized,
-                                    newNormalFrame: context.normalFrame)
-        case (.snappedLeft, .down):
-            // Down from a snapped side restores to normal size.
-            return TransitionResult(action: .applyFrame(context.normalFrame),
-                                    newState: .normal,
-                                    newNormalFrame: context.normalFrame)
-
-        // Snapped right
-        case (.snappedRight, .left):
-            return TransitionResult(action: .applyFrame(context.normalFrame),
-                                    newState: .normal,
-                                    newNormalFrame: context.normalFrame)
-        case (.snappedRight, .right):
-            if let rightDisplay = context.rightNeighbor {
-                let target = WindowStateMachine.rightSnapFrame(rightDisplay, ratio: ratio, gap: gap)
-                return TransitionResult(action: .applyFrame(target),
-                                        newState: .snappedRight,
-                                        newNormalFrame: context.normalFrame)
-            } else {
-                return TransitionResult(action: .noop,
-                                        newState: .snappedRight,
-                                        newNormalFrame: context.normalFrame)
-            }
-        case (.snappedRight, .up):
-            return TransitionResult(action: .applyFrame(max),
-                                    newState: .maximized,
-                                    newNormalFrame: context.normalFrame)
-        case (.snappedRight, .down):
-            return TransitionResult(action: .applyFrame(context.normalFrame),
-                                    newState: .normal,
-                                    newNormalFrame: context.normalFrame)
-
-        // Maximized
-        case (.maximized, .left):
-            return TransitionResult(action: .applyFrame(left),
-                                    newState: .snappedLeft,
-                                    newNormalFrame: context.normalFrame)
-        case (.maximized, .right):
-            return TransitionResult(action: .applyFrame(right),
-                                    newState: .snappedRight,
-                                    newNormalFrame: context.normalFrame)
-        case (.maximized, .up):
-            // Already maximized: stay maximized.
-            return TransitionResult(action: .noop,
-                                    newState: .maximized,
-                                    newNormalFrame: context.normalFrame)
-        case (.maximized, .down):
-            return TransitionResult(action: .applyFrame(context.normalFrame),
-                                    newState: .normal,
-                                    newNormalFrame: context.normalFrame)
-
-        // Minimized
-        case (.minimized, .left):
-            return TransitionResult(action: .unminimizeThenApplyFrame(left),
-                                    newState: .snappedLeft,
-                                    newNormalFrame: context.normalFrame)
-        case (.minimized, .right):
-            return TransitionResult(action: .unminimizeThenApplyFrame(right),
-                                    newState: .snappedRight,
-                                    newNormalFrame: context.normalFrame)
-        case (.minimized, .up):
-            return TransitionResult(action: .unminimizeThenApplyFrame(max),
-                                    newState: .maximized,
-                                    newNormalFrame: context.normalFrame)
-        case (.minimized, .down):
-            return TransitionResult(action: .unminimizeThenApplyFrame(context.normalFrame),
-                                    newState: .normal,
-                                    newNormalFrame: context.normalFrame)
-        }
     }
 }

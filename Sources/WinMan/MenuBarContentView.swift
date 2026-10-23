@@ -24,7 +24,7 @@ struct MenuBarContentView: View {
         shortcutRow(label: "Snap Left", arrow: .left)
         shortcutRow(label: "Snap Right", arrow: .right)
         shortcutRow(label: "Maximize", arrow: .up)
-        shortcutRow(label: "Minimize", arrow: .down)
+        shortcutRow(label: "Snap Down", arrow: .down)
 
         Divider()
 
